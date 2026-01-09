@@ -1,0 +1,480 @@
+/*
+ * Copyright (c) 2024, Zazarothh
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package com.motivation;
+
+import com.google.inject.Provides;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.Client;
+import net.runelite.api.GameState;
+import net.runelite.api.Player;
+import net.runelite.api.Skill;
+import net.runelite.api.events.GameStateChanged;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.chat.ChatColorType;
+import net.runelite.client.chat.ChatMessageBuilder;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.hiscore.HiscoreClient;
+import net.runelite.client.hiscore.HiscoreResult;
+import net.runelite.client.hiscore.HiscoreSkill;
+import net.runelite.client.hiscore.HiscoreSkillType;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.util.ImageUtil;
+
+import javax.inject.Inject;
+import javax.swing.*;
+import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.text.NumberFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Random;
+import java.util.concurrent.ScheduledExecutorService;
+
+@Slf4j
+@PluginDescriptor(
+    name = "Motivation",
+    description = "Motivational messages about your lowest skill ranks",
+    tags = {"hiscore", "motivation", "skill", "rank"}
+)
+public class MotivationPlugin extends Plugin
+{
+    private static final String[] DEFAULT_QUOTES = {
+        "Are you touching grass too often?",
+        "Rank %s and not getting better. Grats!",
+        "Get that XP, the grind doesn't stop.",
+        "Your grandmother has a higher rank than this."
+    };
+
+    @Inject
+    private Client client;
+
+    @Inject
+    private ClientThread clientThread;
+
+    @Inject
+    private MotivationConfig config;
+
+    @Inject
+    private ChatMessageManager chatMessageManager;
+
+    @Inject
+    private HiscoreClient hiscoreClient;
+
+    @Inject
+    private ClientToolbar clientToolbar;
+
+    @Inject
+    private ScheduledExecutorService executor;
+
+    @Getter
+    private MotivationPanel panel;
+
+    private NavigationButton navButton;
+
+    @Override
+    protected void startUp() throws Exception
+    {
+        panel = new MotivationPanel(this, client);
+
+        BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
+        if (icon == null)
+        {
+            // Fallback to a default icon if custom icon not found
+            icon = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        }
+
+        navButton = NavigationButton.builder()
+            .tooltip("Motivation")
+            .icon(icon)
+            .priority(10)
+            .panel(panel)
+            .build();
+
+        clientToolbar.addNavigation(navButton);
+
+        log.info("Motivation plugin started");
+    }
+
+    @Override
+    protected void shutDown() throws Exception
+    {
+        clientToolbar.removeNavigation(navButton);
+        log.info("Motivation plugin stopped");
+    }
+
+    @Subscribe
+    public void onGameStateChanged(GameStateChanged event)
+    {
+        if (event.getGameState() == GameState.LOGGED_IN)
+        {
+            // Use a delayed check to ensure skill data is fully loaded
+            executor.submit(() ->
+            {
+                try
+                {
+                    // Wait for skill data to load from server
+                    Thread.sleep(3000);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+
+                clientThread.invokeLater(() ->
+                {
+                    Player localPlayer = client.getLocalPlayer();
+                    if (localPlayer != null && localPlayer.getName() != null)
+                    {
+                        if (config.showLoginMessage())
+                        {
+                            checkAndDisplayMessage(localPlayer.getName());
+                        }
+                        // Refresh panel data
+                        refreshPanelData(localPlayer.getName());
+                    }
+                });
+            });
+        }
+    }
+
+    private void checkAndDisplayMessage(String playerName)
+    {
+        Optional<Skill> lowestSkill = getLowestNon99Skill();
+        if (!lowestSkill.isPresent())
+        {
+            // All skills are 99, show a congratulatory message
+            sendChatMessage("All skills at 99! You absolute legend!");
+            return;
+        }
+
+        Skill skill = lowestSkill.get();
+        int level = client.getRealSkillLevel(skill);
+
+        // Fetch hiscore data asynchronously
+        executor.submit(() ->
+        {
+            try
+            {
+                HiscoreResult result = hiscoreClient.lookup(playerName);
+                if (result != null)
+                {
+                    HiscoreSkill hiscoreSkill = skillToHiscoreSkill(skill);
+                    if (hiscoreSkill != null)
+                    {
+                        net.runelite.client.hiscore.Skill hiscoreData = result.getSkill(hiscoreSkill);
+                        if (hiscoreData != null && hiscoreData.getRank() != -1)
+                        {
+                            int rank = hiscoreData.getRank();
+                            String message = formatMessage(skill, level, rank);
+
+                            SwingUtilities.invokeLater(() ->
+                            {
+                                if (config.useOverhead())
+                                {
+                                    clientThread.invokeLater(() ->
+                                    {
+                                        Player player = client.getLocalPlayer();
+                                        if (player != null)
+                                        {
+                                            player.setOverheadText(message);
+                                            player.setOverheadCycle(200);
+                                        }
+                                    });
+                                }
+                                else
+                                {
+                                    sendChatMessage(message);
+                                }
+                            });
+                        }
+                        else
+                        {
+                            sendChatMessage(formatMessageNoRank(skill, level));
+                        }
+                    }
+                }
+            }
+            catch (IOException e)
+            {
+                log.warn("Failed to lookup hiscore for {}", playerName, e);
+                // Send message without rank
+                SwingUtilities.invokeLater(() -> sendChatMessage(formatMessageNoRank(skill, level)));
+            }
+        });
+    }
+
+    void refreshPanelData(String playerName)
+    {
+        executor.submit(() ->
+        {
+            try
+            {
+                HiscoreResult result = hiscoreClient.lookup(playerName);
+                SwingUtilities.invokeLater(() -> panel.updateSkillData(result));
+            }
+            catch (IOException e)
+            {
+                log.warn("Failed to lookup hiscore for panel", e);
+                SwingUtilities.invokeLater(() -> panel.updateSkillData(null));
+            }
+        });
+    }
+
+    private Optional<Skill> getLowestNon99Skill()
+    {
+        return Arrays.stream(Skill.values())
+            .filter(s -> s != Skill.OVERALL)
+            .filter(s -> {
+                try
+                {
+                    int level = client.getRealSkillLevel(s);
+                    int xp = client.getSkillExperience(s);
+                    return level < 99 && xp > 0;
+                }
+                catch (Exception e)
+                {
+                    // Handle case where skill might not exist (e.g., Sailing)
+                    return false;
+                }
+            })
+            .min(Comparator.comparingInt(s -> client.getRealSkillLevel(s)));
+    }
+
+    List<SkillData> getNon99Skills()
+    {
+        List<SkillData> skills = new ArrayList<>();
+        for (Skill skill : Skill.values())
+        {
+            if (skill == Skill.OVERALL)
+            {
+                continue;
+            }
+
+            try
+            {
+                int level = client.getRealSkillLevel(skill);
+                int xp = client.getSkillExperience(skill);
+                if (level < 99 && xp > 0)
+                {
+                    skills.add(new SkillData(skill, level, xp, -1));
+                }
+            }
+            catch (Exception e)
+            {
+                // Skip skills that cause issues
+            }
+        }
+
+        skills.sort(Comparator.comparingInt(SkillData::getLevel));
+        return skills;
+    }
+
+    private String formatMessage(Skill skill, int level, int rank)
+    {
+        String quote = getRandomQuote(rank);
+        String skillName = formatSkillName(skill);
+
+        return String.format("Level %d %s... %s", level, skillName, quote);
+    }
+
+    private String formatMessageNoRank(Skill skill, int level)
+    {
+        String quote = getRandomQuote(-1);
+        String skillName = formatSkillName(skill);
+
+        return String.format("Level %d %s... %s", level, skillName, quote);
+    }
+
+    private String formatSkillName(Skill skill)
+    {
+        String name = skill.getName();
+        return name.substring(0, 1).toUpperCase() + name.substring(1).toLowerCase();
+    }
+
+    private String getRandomQuote(int rank)
+    {
+        List<String> allQuotes = new ArrayList<>(Arrays.asList(DEFAULT_QUOTES));
+
+        // Add custom quotes from config
+        String customQuotesStr = config.customQuotes();
+        if (customQuotesStr != null && !customQuotesStr.trim().isEmpty())
+        {
+            // Split by actual newlines OR literal \n strings (RuneLite config may use either)
+            String[] customQuotes = customQuotesStr.split("\\r?\\n|\\\\n");
+            for (String quote : customQuotes)
+            {
+                if (!quote.trim().isEmpty())
+                {
+                    allQuotes.add(quote.trim());
+                }
+            }
+        }
+
+        Random random = new Random();
+        String quote = allQuotes.get(random.nextInt(allQuotes.size()));
+
+        // Replace %s or %d with rank if present in the quote
+        if (rank > 0 && (quote.contains("%s") || quote.contains("%d")))
+        {
+            String formattedRank = NumberFormat.getNumberInstance(Locale.US).format(rank);
+            quote = quote.replace("%d", formattedRank).replace("%s", formattedRank);
+        }
+
+        return quote;
+    }
+
+    private void sendChatMessage(String message)
+    {
+        final String chatMessage = new ChatMessageBuilder()
+            .append(ChatColorType.HIGHLIGHT)
+            .append("[Motivation] ")
+            .append(ChatColorType.NORMAL)
+            .append(message)
+            .build();
+
+        chatMessageManager.queue(QueuedMessage.builder()
+            .type(ChatMessageType.CONSOLE)
+            .runeLiteFormattedMessage(chatMessage)
+            .build());
+    }
+
+    private HiscoreSkill skillToHiscoreSkill(Skill skill)
+    {
+        switch (skill)
+        {
+            case ATTACK:
+                return HiscoreSkill.ATTACK;
+            case DEFENCE:
+                return HiscoreSkill.DEFENCE;
+            case STRENGTH:
+                return HiscoreSkill.STRENGTH;
+            case HITPOINTS:
+                return HiscoreSkill.HITPOINTS;
+            case RANGED:
+                return HiscoreSkill.RANGED;
+            case PRAYER:
+                return HiscoreSkill.PRAYER;
+            case MAGIC:
+                return HiscoreSkill.MAGIC;
+            case COOKING:
+                return HiscoreSkill.COOKING;
+            case WOODCUTTING:
+                return HiscoreSkill.WOODCUTTING;
+            case FLETCHING:
+                return HiscoreSkill.FLETCHING;
+            case FISHING:
+                return HiscoreSkill.FISHING;
+            case FIREMAKING:
+                return HiscoreSkill.FIREMAKING;
+            case CRAFTING:
+                return HiscoreSkill.CRAFTING;
+            case SMITHING:
+                return HiscoreSkill.SMITHING;
+            case MINING:
+                return HiscoreSkill.MINING;
+            case HERBLORE:
+                return HiscoreSkill.HERBLORE;
+            case AGILITY:
+                return HiscoreSkill.AGILITY;
+            case THIEVING:
+                return HiscoreSkill.THIEVING;
+            case SLAYER:
+                return HiscoreSkill.SLAYER;
+            case FARMING:
+                return HiscoreSkill.FARMING;
+            case RUNECRAFT:
+                return HiscoreSkill.RUNECRAFT;
+            case HUNTER:
+                return HiscoreSkill.HUNTER;
+            case CONSTRUCTION:
+                return HiscoreSkill.CONSTRUCTION;
+            default:
+                // Handle Sailing or any future skills
+                try
+                {
+                    return HiscoreSkill.valueOf(skill.name());
+                }
+                catch (IllegalArgumentException e)
+                {
+                    return null;
+                }
+        }
+    }
+
+    @Provides
+    MotivationConfig provideConfig(ConfigManager configManager)
+    {
+        return configManager.getConfig(MotivationConfig.class);
+    }
+
+    /**
+     * Data class to hold skill information for the panel
+     */
+    @Getter
+    public static class SkillData
+    {
+        private static final int MAX_XP = 13_034_431;
+        private final Skill skill;
+        private final int level;
+        private final int xp;
+        private int rank;
+
+        public SkillData(Skill skill, int level, int xp, int rank)
+        {
+            this.skill = skill;
+            this.level = level;
+            this.xp = xp;
+            this.rank = rank;
+        }
+
+        public void setRank(int rank)
+        {
+            this.rank = rank;
+        }
+
+        public double getPercentTo99()
+        {
+            return (xp * 100.0) / MAX_XP;
+        }
+
+        public int getXp()
+        {
+            return xp;
+        }
+    }
+}
