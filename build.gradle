@@ -21,9 +21,6 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     testImplementation group: 'net.runelite', name: 'client', version: runeLiteVersion
     testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
-
-    // Runtime dependency for running with RuneLite
-    runtimeOnly group: 'net.runelite', name: 'client', version: runeLiteVersion
 }
 
 group = 'com.motivation'
@@ -37,22 +34,4 @@ tasks.withType(JavaCompile) {
 
 tasks.withType(Jar) {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-}
-
-// Task to run RuneLite with this plugin loaded
-task runClient(type: JavaExec) {
-    group = 'runelite'
-    description = 'Run RuneLite client with this plugin'
-
-    classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'net.runelite.client.RuneLite'
-
-    jvmArgs = [
-        '-ea',
-        '-Xmx512m',
-        '-Drunelite.pluginhub.version=1.0.0',
-        '-Drunelite.externalPlugins=com.motivation.MotivationPlugin'
-    ]
-
-    args = ['--developer-mode', '--debug']
 }
