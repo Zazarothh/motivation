@@ -35,6 +35,10 @@ tasks.withType(JavaCompile) {
     options.encoding = 'UTF-8'
 }
 
+tasks.withType(Jar) {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 // Task to run RuneLite with this plugin loaded
 task runClient(type: JavaExec) {
     group = 'runelite'
