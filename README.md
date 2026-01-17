@@ -1,4 +1,4 @@
-# Motivation
+# Help Motivation
 
 A RuneLite plugin that displays motivational messages about your lowest-ranked skills.
 

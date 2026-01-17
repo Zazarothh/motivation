@@ -1,28 +1,4 @@
-/*
- * Copyright (c) 2024, Zazarothh
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
- * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-package com.motivation;
+package com.helpmotivation;
 
 import com.google.inject.Provides;
 import lombok.Getter;
@@ -43,7 +19,6 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.hiscore.HiscoreClient;
 import net.runelite.client.hiscore.HiscoreResult;
 import net.runelite.client.hiscore.HiscoreSkill;
-import net.runelite.client.hiscore.HiscoreSkillType;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -63,14 +38,15 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @PluginDescriptor(
-    name = "Motivation",
+    name = "Help Motivation",
     description = "Motivational messages about your lowest skill ranks",
     tags = {"hiscore", "motivation", "skill", "rank"}
 )
-public class MotivationPlugin extends Plugin
+public class HelpMotivationPlugin extends Plugin
 {
     private static final String[] DEFAULT_QUOTES = {
         "Are you touching grass too often?",
@@ -86,7 +62,7 @@ public class MotivationPlugin extends Plugin
     private ClientThread clientThread;
 
     @Inject
-    private MotivationConfig config;
+    private HelpMotivationConfig config;
 
     @Inject
     private ChatMessageManager chatMessageManager;
@@ -101,24 +77,23 @@ public class MotivationPlugin extends Plugin
     private ScheduledExecutorService executor;
 
     @Getter
-    private MotivationPanel panel;
+    private HelpMotivationPanel panel;
 
     private NavigationButton navButton;
 
     @Override
     protected void startUp() throws Exception
     {
-        panel = new MotivationPanel(this, client);
+        panel = new HelpMotivationPanel(this, client);
 
         BufferedImage icon = ImageUtil.loadImageResource(getClass(), "icon.png");
         if (icon == null)
         {
-            // Fallback to a default icon if custom icon not found
             icon = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
         }
 
         navButton = NavigationButton.builder()
-            .tooltip("Motivation")
+            .tooltip("Help Motivation")
             .icon(icon)
             .priority(10)
             .panel(panel)
@@ -126,14 +101,14 @@ public class MotivationPlugin extends Plugin
 
         clientToolbar.addNavigation(navButton);
 
-        log.info("Motivation plugin started");
+        log.info("Help Motivation plugin started");
     }
 
     @Override
     protected void shutDown() throws Exception
     {
         clientToolbar.removeNavigation(navButton);
-        log.info("Motivation plugin stopped");
+        log.info("Help Motivation plugin stopped");
     }
 
     @Subscribe
@@ -141,20 +116,7 @@ public class MotivationPlugin extends Plugin
     {
         if (event.getGameState() == GameState.LOGGED_IN)
         {
-            // Use a delayed check to ensure skill data is fully loaded
-            executor.submit(() ->
-            {
-                try
-                {
-                    // Wait for skill data to load from server
-                    Thread.sleep(3000);
-                }
-                catch (InterruptedException e)
-                {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-
+            executor.schedule(() ->
                 clientThread.invokeLater(() ->
                 {
                     Player localPlayer = client.getLocalPlayer();
@@ -164,11 +126,11 @@ public class MotivationPlugin extends Plugin
                         {
                             checkAndDisplayMessage(localPlayer.getName());
                         }
-                        // Refresh panel data
                         refreshPanelData(localPlayer.getName());
                     }
-                });
-            });
+                }),
+                3, TimeUnit.SECONDS
+            );
         }
     }
 
@@ -177,7 +139,6 @@ public class MotivationPlugin extends Plugin
         Optional<Skill> lowestSkill = getLowestNon99Skill();
         if (!lowestSkill.isPresent())
         {
-            // All skills are 99, show a congratulatory message
             sendChatMessage("All skills at 99! You absolute legend!");
             return;
         }
@@ -185,7 +146,6 @@ public class MotivationPlugin extends Plugin
         Skill skill = lowestSkill.get();
         int level = client.getRealSkillLevel(skill);
 
-        // Fetch hiscore data asynchronously
         executor.submit(() ->
         {
             try
@@ -232,7 +192,6 @@ public class MotivationPlugin extends Plugin
             catch (IOException e)
             {
                 log.warn("Failed to lookup hiscore for {}", playerName, e);
-                // Send message without rank
                 SwingUtilities.invokeLater(() -> sendChatMessage(formatMessageNoRank(skill, level)));
             }
         });
@@ -268,7 +227,6 @@ public class MotivationPlugin extends Plugin
                 }
                 catch (Exception e)
                 {
-                    // Handle case where skill might not exist (e.g., Sailing)
                     return false;
                 }
             })
@@ -296,7 +254,6 @@ public class MotivationPlugin extends Plugin
             }
             catch (Exception e)
             {
-                // Skip skills that cause issues
             }
         }
 
@@ -330,11 +287,9 @@ public class MotivationPlugin extends Plugin
     {
         List<String> allQuotes = new ArrayList<>(Arrays.asList(DEFAULT_QUOTES));
 
-        // Add custom quotes from config
         String customQuotesStr = config.customQuotes();
         if (customQuotesStr != null && !customQuotesStr.trim().isEmpty())
         {
-            // Split by actual newlines OR literal \n strings (RuneLite config may use either)
             String[] customQuotes = customQuotesStr.split("\\r?\\n|\\\\n");
             for (String quote : customQuotes)
             {
@@ -348,7 +303,6 @@ public class MotivationPlugin extends Plugin
         Random random = new Random();
         String quote = allQuotes.get(random.nextInt(allQuotes.size()));
 
-        // Replace %s or %d with rank if present in the quote
         if (rank > 0 && (quote.contains("%s") || quote.contains("%d")))
         {
             String formattedRank = NumberFormat.getNumberInstance(Locale.US).format(rank);
@@ -362,7 +316,7 @@ public class MotivationPlugin extends Plugin
     {
         final String chatMessage = new ChatMessageBuilder()
             .append(ChatColorType.HIGHLIGHT)
-            .append("[Motivation] ")
+            .append("[Help Motivation] ")
             .append(ChatColorType.NORMAL)
             .append(message)
             .build();
@@ -424,7 +378,6 @@ public class MotivationPlugin extends Plugin
             case CONSTRUCTION:
                 return HiscoreSkill.CONSTRUCTION;
             default:
-                // Handle Sailing or any future skills
                 try
                 {
                     return HiscoreSkill.valueOf(skill.name());
@@ -437,14 +390,11 @@ public class MotivationPlugin extends Plugin
     }
 
     @Provides
-    MotivationConfig provideConfig(ConfigManager configManager)
+    HelpMotivationConfig provideConfig(ConfigManager configManager)
     {
-        return configManager.getConfig(MotivationConfig.class);
+        return configManager.getConfig(HelpMotivationConfig.class);
     }
 
-    /**
-     * Data class to hold skill information for the panel
-     */
     @Getter
     public static class SkillData
     {

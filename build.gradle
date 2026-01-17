@@ -23,7 +23,7 @@ dependencies {
     testImplementation group: 'net.runelite', name: 'jshell', version: runeLiteVersion
 }
 
-group = 'com.motivation'
+group = 'com.helpmotivation'
 version = '1.0.0'
 sourceCompatibility = '11'
 targetCompatibility = '11'
@@ -34,4 +34,11 @@ tasks.withType(JavaCompile) {
 
 tasks.withType(Jar) {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register('runClient', JavaExec) {
+    group = 'application'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.helpmotivation.HelpMotivationPluginTest'
+    jvmArgs = ['-ea']
 }
