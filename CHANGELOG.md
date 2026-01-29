@@ -2,6 +2,19 @@
 
 All notable changes to the Help Motivation plugin.
 
+## [1.1.0] - 2026-01-29
+
+### Added
+- Scheduled messages: Motivational messages now repeat on configurable interval (1m, 5m, 15m, 30m, 1h, 2h, 5h)
+- Pure Mode: Fully ignore combat skills (Attack, Strength, Defence, Ranged, Magic, Prayer)
+
+### Changed
+- Messages now use scheduler instead of one-time login event
+- Pure filter now fully ignores combat skills (not just level 1)
+
+### Removed
+- "Show Login Message" config option (replaced by scheduled messages)
+
 ## [1.0.1] - 2025-01-19
 
 ### Added

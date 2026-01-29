@@ -16,6 +16,7 @@ import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.hiscore.HiscoreClient;
 import net.runelite.client.hiscore.HiscoreResult;
 import net.runelite.client.hiscore.HiscoreSkill;
@@ -40,6 +41,7 @@ import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -87,10 +89,17 @@ public class HelpMotivationPlugin extends Plugin
     @Inject
     private ScheduledExecutorService executor;
 
+    @Inject
+    private ConfigManager configManager;
+
     @Getter
     private HelpMotivationPanel panel;
 
     private NavigationButton navButton;
+
+    private ScheduledFuture<?> messageTask;
+
+    private String currentPlayerName;
 
     @Override
     protected void startUp() throws Exception
@@ -118,6 +127,7 @@ public class HelpMotivationPlugin extends Plugin
     @Override
     protected void shutDown() throws Exception
     {
+        stopMessageScheduler();
         clientToolbar.removeNavigation(navButton);
         log.info("Help Motivation plugin stopped");
     }
@@ -133,15 +143,100 @@ public class HelpMotivationPlugin extends Plugin
                     Player localPlayer = client.getLocalPlayer();
                     if (localPlayer != null && localPlayer.getName() != null)
                     {
-                        if (config.showLoginMessage())
-                        {
-                            checkAndDisplayMessage(localPlayer.getName());
-                        }
-                        refreshPanelData(localPlayer.getName());
+                        currentPlayerName = localPlayer.getName();
+                        refreshPanelData(currentPlayerName);
+                        startMessageScheduler();
                     }
                 }),
                 3, TimeUnit.SECONDS
             );
+        }
+        else if (event.getGameState() == GameState.LOGIN_SCREEN)
+        {
+            stopMessageScheduler();
+            currentPlayerName = null;
+        }
+    }
+
+    @Subscribe
+    public void onConfigChanged(ConfigChanged event)
+    {
+        if (!event.getGroup().equals("helpmotivation"))
+        {
+            return;
+        }
+
+        if (event.getKey().equals("enableMessages") || event.getKey().equals("messageInterval"))
+        {
+            if (currentPlayerName != null && client.getGameState() == GameState.LOGGED_IN)
+            {
+                stopMessageScheduler();
+                startMessageScheduler();
+            }
+        }
+
+        if (event.getKey().equals("pureMode"))
+        {
+            if (currentPlayerName != null)
+            {
+                refreshPanelData(currentPlayerName);
+            }
+        }
+    }
+
+    private void startMessageScheduler()
+    {
+        stopMessageScheduler();
+
+        if (!config.enableMessages())
+        {
+            return;
+        }
+
+        long intervalMs = parseIntervalToMillis(config.messageInterval());
+
+        messageTask = executor.scheduleAtFixedRate(() ->
+            clientThread.invokeLater(() ->
+            {
+                Player localPlayer = client.getLocalPlayer();
+                if (localPlayer != null && localPlayer.getName() != null)
+                {
+                    checkAndDisplayMessage(localPlayer.getName());
+                }
+            }),
+            intervalMs, intervalMs, TimeUnit.MILLISECONDS
+        );
+    }
+
+    private void stopMessageScheduler()
+    {
+        if (messageTask != null)
+        {
+            messageTask.cancel(false);
+            messageTask = null;
+        }
+    }
+
+    private long parseIntervalToMillis(String interval)
+    {
+        switch (interval)
+        {
+            case "1m":
+                return 60_000L;
+            case "5m":
+                return 300_000L;
+            case "15m":
+                return 900_000L;
+            case "30m":
+                return 1_800_000L;
+            case "1h":
+                return 3_600_000L;
+            case "2h":
+                return 7_200_000L;
+            case "5h":
+                return 18_000_000L;
+            default:
+                return 1_800_000L;
         }
     }
 
@@ -225,21 +320,22 @@ public class HelpMotivationPlugin extends Plugin
         });
     }
 
-    private boolean isPureSkillAtLevel1(Skill skill, int level)
+    private boolean isPureCombatSkill(Skill skill)
     {
-        return PURE_COMBAT_SKILLS.contains(skill) && level == 1;
+        return config.pureMode() && PURE_COMBAT_SKILLS.contains(skill);
     }
 
     private Optional<Skill> getLowestNon99Skill()
     {
         return Arrays.stream(Skill.values())
             .filter(s -> s != Skill.OVERALL)
+            .filter(s -> !isPureCombatSkill(s))
             .filter(s -> {
                 try
                 {
                     int level = client.getRealSkillLevel(s);
                     int xp = client.getSkillExperience(s);
-                    return level < 99 && xp >= 0 && !isPureSkillAtLevel1(s, level);
+                    return level < 99 && xp >= 0;
                 }
                 catch (Exception e)
                 {
@@ -254,7 +350,7 @@ public class HelpMotivationPlugin extends Plugin
         List<SkillData> skills = new ArrayList<>();
         for (Skill skill : Skill.values())
         {
-            if (skill == Skill.OVERALL)
+            if (skill == Skill.OVERALL || isPureCombatSkill(skill))
             {
                 continue;
             }
@@ -263,7 +359,7 @@ public class HelpMotivationPlugin extends Plugin
             {
                 int level = client.getRealSkillLevel(skill);
                 int xp = client.getSkillExperience(skill);
-                if (level < 99 && xp >= 0 && !isPureSkillAtLevel1(skill, level))
+                if (level < 99 && xp >= 0)
                 {
                     skills.add(new SkillData(skill, level, xp, -1));
                 }
